@@ -90,9 +90,9 @@ body {
 }
 
 .date-label {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--muted);
   margin-bottom: 6px;
 }
