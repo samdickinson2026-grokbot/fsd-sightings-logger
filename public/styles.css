@@ -134,23 +134,23 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  min-height: 280px;
+  gap: 20px;
+  min-height: 340px;
 }
 
 .btn-primary {
   width: 100%;
-  max-width: 360px;
-  min-height: 120px;
+  max-width: 400px;
+  min-height: 168px;
   border: none;
-  border-radius: 24px;
+  border-radius: 28px;
   background: linear-gradient(180deg, #3b8cff 0%, #2563d4 100%);
   color: #fff;
-  font-size: 28px;
+  font-size: 34px;
   font-weight: 700;
   letter-spacing: -0.02em;
   cursor: pointer;
-  box-shadow: 0 8px 28px rgba(59, 140, 255, 0.35);
+  box-shadow: 0 10px 32px rgba(59, 140, 255, 0.4);
   transition: transform 0.08s ease, filter 0.15s;
   touch-action: manipulation;
   user-select: none;
@@ -164,17 +164,17 @@ body {
 .choice-row {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   width: 100%;
-  max-width: 360px;
+  max-width: 400px;
 }
 
 .btn-choice {
   width: 100%;
-  min-height: 88px;
-  border-radius: 20px;
+  min-height: 120px;
+  border-radius: 24px;
   border: 1px solid var(--border);
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 700;
   cursor: pointer;
   touch-action: manipulation;
@@ -198,7 +198,7 @@ body {
 }
 
 .prompt {
-  font-size: 16px;
+  font-size: 18px;
   color: var(--muted);
   margin-bottom: 4px;
   text-align: center;
@@ -218,9 +218,10 @@ body {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--muted);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
-  padding: 10px 20px;
+  padding: 14px 28px;
+  min-height: 48px;
   border-radius: 999px;
   cursor: pointer;
   touch-action: manipulation;
