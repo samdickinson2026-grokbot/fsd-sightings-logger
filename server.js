@@ -369,6 +369,21 @@ app.get('/api/stats', (_req, res) => {
   res.json(buildStats());
 });
 
+function eventCountsByDate() {
+  const map = new Map();
+  for (const e of readEvents()) {
+    if (!e || !e.date) continue;
+    let row = map.get(e.date);
+    if (!row) {
+      row = { date: e.date, teslas_seen: 0, fsd_count: 0 };
+      map.set(e.date, row);
+    }
+    row.teslas_seen += 1;
+    if (e.fsd_active) row.fsd_count += 1;
+  }
+  return [...map.values()];
+}
+
 app.post('/api/import-events', (req, res) => {
   const list = Array.isArray(req.body && req.body.events) ? req.body.events : [];
   const existing = new Set(readEvents().map((e) => e.id));
@@ -385,8 +400,12 @@ app.post('/api/import-events', (req, res) => {
     };
     appendEvent(ev);
     existing.add(ev.id);
-    upsertDaily(date, fsd_active, 1, fsd_active ? 1 : 0);
     imported += 1;
+  }
+  // Never +1 CSV per imported event (double-counts after a wipe).
+  // Only raise daily totals up to event-derived counts via max-merge.
+  if (imported > 0) {
+    mergeRowsIntoCsv(eventCountsByDate());
   }
   res.json({
     ok: true,
@@ -394,6 +413,17 @@ app.post('/api/import-events', (req, res) => {
     today: todayTotals(todayET()),
     events: readEvents().length,
   });
+});
+
+app.post('/api/set-day', (req, res) => {
+  const body = req.body || {};
+  const date = String(body.date || todayET());
+  const teslas_seen = Math.max(0, Number(body.teslas_seen) || 0);
+  const fsd_count = Math.max(0, Number(body.fsd_count) || 0);
+  const rows = parseCsv().filter((r) => r.date !== date);
+  rows.push({ date, teslas_seen, fsd_count, fsd_rate_pct: 0 });
+  writeCsv(rows);
+  res.json({ ok: true, row: todayTotals(date), today: todayTotals(todayET()) });
 });
 
 ensureDataDir();
