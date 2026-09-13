@@ -12,6 +12,8 @@
   --gray-bar: #8e8e93;
   --radius: 16px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+  --tab-bar-height: 48px;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,
     Helvetica, Arial, sans-serif;
 }
@@ -41,17 +43,23 @@ body {
   max-width: 480px;
   margin: 0 auto;
   position: relative;
+  padding-top: calc(var(--safe-top) + var(--tab-bar-height));
 }
 
-/* Tabs */
+/* Tabs — fixed + safe-area so Log/Stats stay visible under iOS status bar / overscroll */
 .tab-bar {
   display: flex;
   gap: 0;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
-  position: sticky;
+  position: fixed;
   top: 0;
-  z-index: 20;
+  left: 0;
+  right: 0;
+  max-width: 480px;
+  margin: 0 auto;
+  padding-top: var(--safe-top);
+  z-index: 50;
 }
 
 .tab-btn {
