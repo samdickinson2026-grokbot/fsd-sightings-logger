@@ -14,13 +14,73 @@ const TZ = 'America/New_York';
 const SEED_ROWS = [
   { date: '2026-09-10', teslas_seen: 7, fsd_count: 3, fsd_rate_pct: 42.9 },
   { date: '2026-09-11', teslas_seen: 10, fsd_count: 3, fsd_rate_pct: 30.0 },
+  { date: '2026-09-12', teslas_seen: 25, fsd_count: 8, fsd_rate_pct: 32.0 },
 ];
+
+const BACKUP_CSV_URL =
+  process.env.BACKUP_CSV_URL ||
+  'https://raw.githubusercontent.com/samdickinson2026-grokbot/fsd-sightings-logger/main/data/tesla_fsd_observations.csv';
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(EVENTS_PATH)) fs.writeFileSync(EVENTS_PATH, '');
   if (!fs.existsSync(CSV_PATH) || fs.readFileSync(CSV_PATH, 'utf8').trim() === '') {
     writeCsv(SEED_ROWS);
+  } else {
+    // Ensure seed days exist even if a partial CSV survived
+    mergeRowsIntoCsv(SEED_ROWS);
+  }
+}
+
+function mergeRowsIntoCsv(incoming) {
+  const byDate = new Map();
+  for (const r of parseCsv()) byDate.set(r.date, { ...r });
+  for (const r of incoming) {
+    if (!r || !r.date) continue;
+    const seen = Number(r.teslas_seen) || 0;
+    const fsd = Number(r.fsd_count) || 0;
+    const cur = byDate.get(r.date);
+    if (!cur) {
+      byDate.set(r.date, {
+        date: r.date,
+        teslas_seen: seen,
+        fsd_count: fsd,
+        fsd_rate_pct: 0,
+      });
+    } else {
+      // Keep the larger totals (backup/phone may be ahead after a wipe)
+      cur.teslas_seen = Math.max(cur.teslas_seen, seen);
+      cur.fsd_count = Math.max(cur.fsd_count, fsd);
+    }
+  }
+  writeCsv([...byDate.values()].filter((r) => r.teslas_seen > 0 || r.fsd_count > 0));
+}
+
+async function mergeBackupCsvFromUrl() {
+  try {
+    const res = await fetch(BACKUP_CSV_URL, { cache: 'no-store' });
+    if (!res.ok) {
+      console.warn('Backup CSV fetch failed', res.status);
+      return;
+    }
+    const text = await res.text();
+    const lines = text.trim().split(/\r?\n/).slice(1);
+    const rows = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const [date, teslas_seen, fsd_count] = line.split(',');
+      rows.push({
+        date,
+        teslas_seen: Number(teslas_seen),
+        fsd_count: Number(fsd_count),
+      });
+    }
+    if (rows.length) {
+      mergeRowsIntoCsv(rows);
+      console.log(`Merged ${rows.length} backup CSV rows from GitHub`);
+    }
+  } catch (err) {
+    console.warn('Backup CSV merge error', err.message);
   }
 }
 
@@ -226,8 +286,6 @@ function buildStats() {
   };
 }
 
-ensureDataDir();
-
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -243,12 +301,24 @@ app.get('/api/today', (_req, res) => {
 });
 
 app.post('/api/sighting', (req, res) => {
-  const fsd_active = Boolean(req.body && req.body.fsd_active);
+  const body = req.body || {};
+  const fsd_active = Boolean(body.fsd_active);
   const now = new Date();
   const date = todayET();
+  const id = body.id && String(body.id) ? String(body.id) : crypto.randomUUID();
+  const existing = readEvents();
+  if (existing.some((e) => e.id === id)) {
+    const row = todayTotals(date);
+    return res.json({
+      ok: true,
+      duplicate: true,
+      event: existing.find((e) => e.id === id),
+      today: row,
+    });
+  }
   const ev = {
-    id: crypto.randomUUID(),
-    timestamp: now.toISOString(),
+    id,
+    timestamp: body.timestamp || now.toISOString(),
     date,
     fsd_active,
   };
@@ -299,8 +369,39 @@ app.get('/api/stats', (_req, res) => {
   res.json(buildStats());
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`FSD Logger listening on http://0.0.0.0:${PORT}`);
-  console.log(`Data: ${DATA_DIR}`);
-  console.log(`Today (ET): ${todayET()}`);
+app.post('/api/import-events', (req, res) => {
+  const list = Array.isArray(req.body && req.body.events) ? req.body.events : [];
+  const existing = new Set(readEvents().map((e) => e.id));
+  let imported = 0;
+  for (const raw of list) {
+    if (!raw || !raw.id || existing.has(raw.id)) continue;
+    const fsd_active = Boolean(raw.fsd_active);
+    const date = String(raw.date || todayET());
+    const ev = {
+      id: String(raw.id),
+      timestamp: raw.timestamp || new Date().toISOString(),
+      date,
+      fsd_active,
+    };
+    appendEvent(ev);
+    existing.add(ev.id);
+    upsertDaily(date, fsd_active, 1, fsd_active ? 1 : 0);
+    imported += 1;
+  }
+  res.json({
+    ok: true,
+    imported,
+    today: todayTotals(todayET()),
+    events: readEvents().length,
+  });
+});
+
+ensureDataDir();
+mergeBackupCsvFromUrl().finally(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`FSD Logger listening on http://0.0.0.0:${PORT}`);
+    console.log(`Data: ${DATA_DIR}`);
+    console.log(`Today (ET): ${todayET()}`);
+    console.log(`Backup CSV: ${BACKUP_CSV_URL}`);
+  });
 });
