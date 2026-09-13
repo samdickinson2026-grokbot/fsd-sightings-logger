@@ -119,15 +119,8 @@
         method: 'POST',
         body: JSON.stringify({ events: local }),
       });
-      if (data.imported > 0) {
-        setTotals(data.today);
-        showToast(
-          `Restored ${data.imported} from phone`,
-          `Today: ${data.today.teslas_seen} seen · ${data.today.fsd_count} FSD`
-        );
-      } else if (data.today) {
-        setTotals(data.today);
-      }
+      if (data.today) setTotals(data.today);
+      // Imports restore event history only; totals use max-merge (no toast spam).
       return data.imported || 0;
     } catch (err) {
       console.warn('reconcile failed', err);
