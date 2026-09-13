@@ -1,6 +1,8 @@
 (() => {
   'use strict';
 
+  const STORAGE_KEY = 'fsd-logger-events-v1';
+
   const $ = (sel) => document.querySelector(sel);
   const dateValue = $('#date-value');
   const totSeen = $('#tot-seen');
@@ -22,6 +24,37 @@
   let chart = null;
   let toastTimer = null;
   let busy = false;
+
+  function loadLocalEvents() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveLocalEvents(list) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    } catch (err) {
+      console.warn('localStorage save failed', err);
+    }
+  }
+
+  function upsertLocalEvent(ev) {
+    if (!ev || !ev.id) return;
+    const list = loadLocalEvents();
+    if (list.some((e) => e.id === ev.id)) return;
+    list.push(ev);
+    // Keep last ~2000 events
+    saveLocalEvents(list.slice(-2000));
+  }
+
+  function removeLocalEvent(id) {
+    saveLocalEvents(loadLocalEvents().filter((e) => e.id !== id));
+  }
 
   async function api(path, opts) {
     const res = await fetch(path, {
@@ -60,7 +93,6 @@
   async function refreshToday() {
     const data = await api('/api/today');
     if (currentDate && currentDate !== data.date) {
-      // Midnight rollover
       showToast('New day', data.display);
     }
     currentDate = data.date;
@@ -78,14 +110,52 @@
     }
   }
 
+  /** If Render wiped, replay phone-stored events the server is missing. */
+  async function reconcileFromPhone() {
+    const local = loadLocalEvents();
+    if (!local.length) return 0;
+    try {
+      const data = await api('/api/import-events', {
+        method: 'POST',
+        body: JSON.stringify({ events: local }),
+      });
+      if (data.imported > 0) {
+        setTotals(data.today);
+        showToast(
+          `Restored ${data.imported} from phone`,
+          `Today: ${data.today.teslas_seen} seen · ${data.today.fsd_count} FSD`
+        );
+      } else if (data.today) {
+        setTotals(data.today);
+      }
+      return data.imported || 0;
+    } catch (err) {
+      console.warn('reconcile failed', err);
+      return 0;
+    }
+  }
+
   async function logSighting(fsd_active) {
     if (busy) return;
     busy = true;
+    const localEv = {
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      date: currentDate || undefined,
+      fsd_active,
+    };
+    // Save on phone first so a wipe mid-request still keeps the tap
+    upsertLocalEvent(localEv);
     try {
       const data = await api('/api/sighting', {
         method: 'POST',
-        body: JSON.stringify({ fsd_active }),
+        body: JSON.stringify({
+          fsd_active,
+          id: localEv.id,
+          timestamp: localEv.timestamp,
+        }),
       });
+      if (data.event) upsertLocalEvent(data.event);
       setTotals(data.today);
       showMain();
       const label = fsd_active ? 'Logged · FSD active' : 'Logged · FSD not active';
@@ -94,7 +164,6 @@
         `Today: ${data.today.teslas_seen} seen · ${data.today.fsd_count} FSD`
       );
       await refreshUndoState();
-      // Refresh stats quietly if that tab may be open later
       if ($('#page-stats').classList.contains('active')) {
         await loadStats();
       }
@@ -111,6 +180,7 @@
     busy = true;
     try {
       const data = await api('/api/undo', { method: 'POST', body: '{}' });
+      if (data.undone && data.undone.id) removeLocalEvent(data.undone.id);
       setTotals(data.today);
       const kind = data.undone.fsd_active ? 'FSD active' : 'FSD not active';
       showToast('Undone', kind);
@@ -249,7 +319,6 @@
     }
   }
 
-  // Tabs
   document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
       document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
@@ -266,7 +335,6 @@
   btnNo.addEventListener('click', () => logSighting(false));
   btnUndo.addEventListener('click', () => undoLast());
 
-  // Date refresh: load + interval + visibility
   async function tickDate() {
     try {
       await refreshToday();
@@ -275,12 +343,17 @@
     }
   }
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') tickDate();
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible') {
+      await reconcileFromPhone();
+      await tickDate();
+      await refreshUndoState();
+    }
   });
 
-  // Init
   (async () => {
+    await tickDate();
+    await reconcileFromPhone();
     await tickDate();
     await refreshUndoState();
     setInterval(tickDate, 30_000);
