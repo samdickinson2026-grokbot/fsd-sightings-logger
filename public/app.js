@@ -191,9 +191,11 @@
 
   function renderChart(stats) {
     const ctx = $('#week-chart').getContext('2d');
-    const seen = stats.week.teslas_seen;
-    const fsd = stats.week.fsd_count;
-    const weekPct = stats.week.fsd_rate_pct;
+    // Running tally = all-time since first logged day
+    const seen = stats.all_time.teslas_seen;
+    const fsd = stats.all_time.fsd_count;
+    const sincePct = stats.all_time.fsd_rate_pct;
+    const sinceLabel = (stats.since && stats.since.label) || 'start';
 
     if (chart) chart.destroy();
 
@@ -221,7 +223,7 @@
             display: true,
             text: [
               'Central FL Tesla / FSD observations',
-              `Week of ${stats.week.label}`,
+              `Since ${sinceLabel}`,
             ],
             color: '#111111',
             font: { size: 13, weight: '600', family: 'system-ui, sans-serif' },
@@ -229,7 +231,7 @@
           },
           subtitle: {
             display: true,
-            text: `${weekPct}% FSD This Week`,
+            text: `${sincePct}% FSD since ${sinceLabel}`,
             color: '#555555',
             font: { size: 12, family: 'system-ui, sans-serif' },
             padding: { bottom: 4 },
