@@ -251,6 +251,18 @@ function todayTotals(date) {
   };
 }
 
+function formatSinceLabel(dateStr) {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 16, 0, 0));
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: TZ,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(dt);
+}
+
 function buildStats() {
   const rows = parseCsv();
   const today = todayET();
@@ -263,6 +275,8 @@ function buildStats() {
   const all_time_pct =
     all_time_seen > 0 ? Math.round((100 * all_time_fsd) / all_time_seen) : 0;
   const week_pct = week_seen > 0 ? Math.round((100 * week_fsd) / week_seen) : 0;
+  const since_date = rows.length ? rows[0].date : today;
+  const since_label = formatSinceLabel(since_date);
   return {
     today,
     week: {
@@ -278,8 +292,12 @@ function buildStats() {
       fsd_count: all_time_fsd,
       fsd_rate_pct: all_time_pct,
     },
+    since: {
+      date: since_date,
+      label: since_label,
+    },
     summary: `Out Of ${all_time_seen} Teslas Observed, ${all_time_pct}% Were Using FSD`,
-    title: `Central FL Tesla / FSD observations — Week of ${formatWeekLabel(start, end)}`,
+    title: `Central FL Tesla / FSD observations — Since ${since_label}`,
     footer: '@SamuelD2022  |  Central Florida FSD',
     daily: rows,
     colors: { teslas_seen: '#8E8E93', on_fsd: '#3B8CFF' },
