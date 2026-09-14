@@ -16,7 +16,8 @@
   <body>
     <nav class="tab-bar" role="tablist">
       <button class="tab-btn active" data-tab="log" type="button">Log</button>
-      <button class="tab-btn" data-tab="stats" type="button">Stats</button>
+      <button class="tab-btn" data-tab="daily" type="button">Daily</button>
+      <button class="tab-btn" data-tab="alltime" type="button">All-time</button>
     </nav>
 
     <section id="page-log" class="page active" role="tabpanel">
@@ -52,7 +53,21 @@
       </div>
     </section>
 
-    <section id="page-stats" class="page" role="tabpanel">
+    <section id="page-daily" class="page" role="tabpanel">
+      <div class="stats-header">
+        <div class="stats-summary" id="daily-summary">Loading…</div>
+        <div class="stats-title" id="daily-title"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-wrap">
+          <canvas id="daily-chart"></canvas>
+        </div>
+        <div class="chart-footer" id="daily-chart-footer">@SamuelD2022  |  Central Florida FSD</div>
+      </div>
+    </section>
+
+    <section id="page-alltime" class="page" role="tabpanel">
       <div class="stats-header">
         <div class="stats-summary" id="stats-summary">Loading…</div>
         <div class="stats-title" id="stats-title"></div>
@@ -83,9 +98,6 @@
       <div class="export-row">
         <a class="btn-link" href="/api/export.csv" download>Download CSV</a>
       </div>
-      <p class="meta-note">
-        Data stored on Atlas under<br />/workspace/fsd-logger/data/
-      </p>
     </section>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

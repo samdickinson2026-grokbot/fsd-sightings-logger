@@ -67,9 +67,9 @@ body {
   background: transparent;
   border: none;
   color: var(--muted);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
-  padding: 14px 8px 12px;
+  padding: 14px 4px 12px;
   cursor: pointer;
   border-bottom: 2px solid transparent;
   letter-spacing: 0.02em;

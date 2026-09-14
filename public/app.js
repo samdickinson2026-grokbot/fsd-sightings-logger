@@ -17,11 +17,16 @@
   const statsSummary = $('#stats-summary');
   const statsTitle = $('#stats-title');
   const chartFooter = $('#chart-footer');
+  const dailySummary = $('#daily-summary');
+  const dailyTitle = $('#daily-title');
+  const dailyChartFooter = $('#daily-chart-footer');
   const dailyTbody = $('#daily-tbody');
 
   let currentDate = '';
+  let currentDisplay = '';
   let hasEvents = false;
-  let chart = null;
+  let allTimeChart = null;
+  let dailyChart = null;
   let toastTimer = null;
   let busy = false;
 
@@ -48,7 +53,6 @@
     const list = loadLocalEvents();
     if (list.some((e) => e.id === ev.id)) return;
     list.push(ev);
-    // Keep last ~2000 events
     saveLocalEvents(list.slice(-2000));
   }
 
@@ -96,8 +100,10 @@
       showToast('New day', data.display);
     }
     currentDate = data.date;
+    currentDisplay = data.display;
     dateValue.textContent = data.display;
     setTotals(data.totals);
+    return data;
   }
 
   async function refreshUndoState() {
@@ -110,7 +116,6 @@
     }
   }
 
-  /** If Render wiped, replay phone-stored events the server is missing. */
   async function reconcileFromPhone() {
     const local = loadLocalEvents();
     if (!local.length) return 0;
@@ -120,12 +125,16 @@
         body: JSON.stringify({ events: local }),
       });
       if (data.today) setTotals(data.today);
-      // Imports restore event history only; totals use max-merge (no toast spam).
       return data.imported || 0;
     } catch (err) {
       console.warn('reconcile failed', err);
       return 0;
     }
+  }
+
+  async function refreshOpenStatsTabs() {
+    if ($('#page-daily').classList.contains('active')) await loadDailyStats();
+    if ($('#page-alltime').classList.contains('active')) await loadAllTimeStats();
   }
 
   async function logSighting(fsd_active) {
@@ -137,7 +146,6 @@
       date: currentDate || undefined,
       fsd_active,
     };
-    // Save on phone first so a wipe mid-request still keeps the tap
     upsertLocalEvent(localEv);
     try {
       const data = await api('/api/sighting', {
@@ -157,9 +165,7 @@
         `Today: ${data.today.teslas_seen} seen · ${data.today.fsd_count} FSD`
       );
       await refreshUndoState();
-      if ($('#page-stats').classList.contains('active')) {
-        await loadStats();
-      }
+      await refreshOpenStatsTabs();
     } catch (err) {
       showToast('Could not log', err.message);
       showMain();
@@ -178,9 +184,7 @@
       const kind = data.undone.fsd_active ? 'FSD active' : 'FSD not active';
       showToast('Undone', kind);
       await refreshUndoState();
-      if ($('#page-stats').classList.contains('active')) {
-        await loadStats();
-      }
+      await refreshOpenStatsTabs();
     } catch (err) {
       showToast('Undo failed', err.message);
       await refreshUndoState();
@@ -189,24 +193,19 @@
     }
   }
 
-  function renderChart(stats) {
-    const ctx = $('#week-chart').getContext('2d');
-    // Running tally = all-time since first logged day
-    const seen = stats.all_time.teslas_seen;
-    const fsd = stats.all_time.fsd_count;
-    const sincePct = stats.all_time.fsd_rate_pct;
-    const sinceLabel = (stats.since && stats.since.label) || 'start';
+  function makeBarChart(canvas, chartRefName, seen, fsd, titleLines, subtitle, colors) {
+    const ctx = canvas.getContext('2d');
+    if (chartRefName === 'daily' && dailyChart) dailyChart.destroy();
+    if (chartRefName === 'alltime' && allTimeChart) allTimeChart.destroy();
 
-    if (chart) chart.destroy();
-
-    chart = new Chart(ctx, {
+    const chart = new Chart(ctx, {
       type: 'bar',
       data: {
         labels: ['Teslas Seen', 'On FSD'],
         datasets: [
           {
             data: [seen, fsd],
-            backgroundColor: [stats.colors.teslas_seen, stats.colors.on_fsd],
+            backgroundColor: [colors.teslas_seen, colors.on_fsd],
             borderWidth: 0,
             borderRadius: 2,
             barPercentage: 0.55,
@@ -221,17 +220,14 @@
           legend: { display: false },
           title: {
             display: true,
-            text: [
-              'Central FL Tesla / FSD observations',
-              `Since ${sinceLabel}`,
-            ],
+            text: titleLines,
             color: '#111111',
             font: { size: 13, weight: '600', family: 'system-ui, sans-serif' },
             padding: { bottom: 8 },
           },
           subtitle: {
             display: true,
-            text: `${sincePct}% FSD since ${sinceLabel}`,
+            text: subtitle,
             color: '#555555',
             font: { size: 12, family: 'system-ui, sans-serif' },
             padding: { bottom: 4 },
@@ -278,6 +274,9 @@
         },
       ],
     });
+
+    if (chartRefName === 'daily') dailyChart = chart;
+    else allTimeChart = chart;
   }
 
   function renderTable(rows, today) {
@@ -300,13 +299,47 @@
     }
   }
 
-  async function loadStats() {
+  async function loadDailyStats() {
+    try {
+      const today = await api('/api/today');
+      const seen = today.totals.teslas_seen || 0;
+      const fsd = today.totals.fsd_count || 0;
+      const pct =
+        seen > 0 ? Math.round((100 * fsd) / seen) : 0;
+      dailySummary.textContent = `Today: ${seen} seen · ${fsd} FSD · ${pct}%`;
+      dailyTitle.textContent = `Central FL Tesla / FSD observations — ${today.display}`;
+      dailyChartFooter.textContent = '@SamuelD2022  |  Central Florida FSD';
+      makeBarChart(
+        $('#daily-chart'),
+        'daily',
+        seen,
+        fsd,
+        ['Central FL Tesla / FSD observations', today.display],
+        `${pct}% FSD today`,
+        { teslas_seen: '#8E8E93', on_fsd: '#3B8CFF' }
+      );
+    } catch (err) {
+      dailySummary.textContent = 'Failed to load daily stats';
+      console.error(err);
+    }
+  }
+
+  async function loadAllTimeStats() {
     try {
       const stats = await api('/api/stats');
       statsSummary.textContent = stats.summary;
       statsTitle.textContent = stats.title;
       chartFooter.textContent = stats.footer;
-      renderChart(stats);
+      const sinceLabel = (stats.since && stats.since.label) || 'start';
+      makeBarChart(
+        $('#week-chart'),
+        'alltime',
+        stats.all_time.teslas_seen,
+        stats.all_time.fsd_count,
+        ['Central FL Tesla / FSD observations', `Since ${sinceLabel}`],
+        `${stats.all_time.fsd_rate_pct}% FSD since ${sinceLabel}`,
+        stats.colors
+      );
       renderTable(stats.daily, stats.today);
     } catch (err) {
       statsSummary.textContent = 'Failed to load stats';
@@ -321,7 +354,8 @@
       btn.classList.add('active');
       const id = btn.dataset.tab;
       $(`#page-${id}`).classList.add('active');
-      if (id === 'stats') await loadStats();
+      if (id === 'daily') await loadDailyStats();
+      if (id === 'alltime') await loadAllTimeStats();
     });
   });
 
@@ -343,6 +377,7 @@
       await reconcileFromPhone();
       await tickDate();
       await refreshUndoState();
+      await refreshOpenStatsTabs();
     }
   });
 
