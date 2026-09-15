@@ -12,14 +12,33 @@ const CSV_PATH = path.join(DATA_DIR, 'tesla_fsd_observations.csv');
 const TZ = 'America/New_York';
 
 const SEED_ROWS = [
-  { date: '2026-09-10', teslas_seen: 7, fsd_count: 3, fsd_rate_pct: 42.9 },
-  { date: '2026-09-11', teslas_seen: 10, fsd_count: 3, fsd_rate_pct: 30.0 },
-  { date: '2026-09-12', teslas_seen: 25, fsd_count: 8, fsd_rate_pct: 32.0 },
+  { date: '2026-09-10', teslas_seen: 7, fsd_count: 3, undetermined_count: 0, fsd_rate_pct: 42.9 },
+  { date: '2026-09-11', teslas_seen: 10, fsd_count: 3, undetermined_count: 0, fsd_rate_pct: 30.0 },
+  { date: '2026-09-12', teslas_seen: 25, fsd_count: 8, undetermined_count: 0, fsd_rate_pct: 32.0 },
 ];
 
 const BACKUP_CSV_URL =
   process.env.BACKUP_CSV_URL ||
   'https://raw.githubusercontent.com/samdickinson2026-grokbot/fsd-sightings-logger/main/data/tesla_fsd_observations.csv';
+
+function calcFsdRate(teslas_seen, fsd_count, undetermined_count) {
+  const denom = (Number(teslas_seen) || 0) - (Number(undetermined_count) || 0);
+  if (denom <= 0) return 0;
+  return Math.round((1000 * (Number(fsd_count) || 0)) / denom) / 10;
+}
+
+function normalizeStatus(raw) {
+  if (raw === 'yes' || raw === 'no' || raw === 'undetermined') return raw;
+  return null;
+}
+
+/** Resolve fsd_status from new events or legacy fsd_active-only events. */
+function eventStatus(e) {
+  if (!e) return 'no';
+  const s = normalizeStatus(e.fsd_status);
+  if (s) return s;
+  return e.fsd_active ? 'yes' : 'no';
+}
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -39,21 +58,28 @@ function mergeRowsIntoCsv(incoming) {
     if (!r || !r.date) continue;
     const seen = Number(r.teslas_seen) || 0;
     const fsd = Number(r.fsd_count) || 0;
+    const undet = Number(r.undetermined_count) || 0;
     const cur = byDate.get(r.date);
     if (!cur) {
       byDate.set(r.date, {
         date: r.date,
         teslas_seen: seen,
         fsd_count: fsd,
+        undetermined_count: undet,
         fsd_rate_pct: 0,
       });
     } else {
       // Keep the larger totals (backup/phone may be ahead after a wipe)
       cur.teslas_seen = Math.max(cur.teslas_seen, seen);
       cur.fsd_count = Math.max(cur.fsd_count, fsd);
+      cur.undetermined_count = Math.max(cur.undetermined_count || 0, undet);
     }
   }
-  writeCsv([...byDate.values()].filter((r) => r.teslas_seen > 0 || r.fsd_count > 0));
+  writeCsv(
+    [...byDate.values()].filter(
+      (r) => r.teslas_seen > 0 || r.fsd_count > 0 || (r.undetermined_count || 0) > 0
+    )
+  );
 }
 
 async function mergeBackupCsvFromUrl() {
@@ -68,11 +94,20 @@ async function mergeBackupCsvFromUrl() {
     const rows = [];
     for (const line of lines) {
       if (!line.trim()) continue;
-      const [date, teslas_seen, fsd_count] = line.split(',');
+      const parts = line.split(',');
+      const date = parts[0];
+      const teslas_seen = Number(parts[1]);
+      const fsd_count = Number(parts[2]);
+      // Old 4-col: date,seen,fsd,rate — new 5-col: date,seen,fsd,undet,rate
+      let undetermined_count = 0;
+      if (parts.length >= 5) {
+        undetermined_count = Number(parts[3]) || 0;
+      }
       rows.push({
         date,
-        teslas_seen: Number(teslas_seen),
-        fsd_count: Number(fsd_count),
+        teslas_seen,
+        fsd_count,
+        undetermined_count,
       });
     }
     if (rows.length) {
@@ -199,12 +234,27 @@ function parseCsv() {
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
-    const [date, teslas_seen, fsd_count, fsd_rate_pct] = line.split(',');
+    const parts = line.split(',');
+    const date = parts[0];
+    const teslas_seen = Number(parts[1]);
+    const fsd_count = Number(parts[2]);
+    let undetermined_count = 0;
+    let fsd_rate_pct;
+    // New 5-col: date,teslas_seen,fsd_count,undetermined_count,fsd_rate_pct
+    // Old 4-col: date,teslas_seen,fsd_count,fsd_rate_pct
+    if (parts.length >= 5) {
+      undetermined_count = Number(parts[3]) || 0;
+      fsd_rate_pct = Number(parts[4]);
+    } else {
+      undetermined_count = 0;
+      fsd_rate_pct = Number(parts[3]);
+    }
     rows.push({
       date,
-      teslas_seen: Number(teslas_seen),
-      fsd_count: Number(fsd_count),
-      fsd_rate_pct: Number(fsd_rate_pct),
+      teslas_seen,
+      fsd_count,
+      undetermined_count,
+      fsd_rate_pct,
     });
   }
   return rows.sort((a, b) => a.date.localeCompare(b.date));
@@ -212,31 +262,41 @@ function parseCsv() {
 
 function writeCsv(rows) {
   const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date));
-  const lines = ['date,teslas_seen,fsd_count,fsd_rate_pct'];
+  const lines = ['date,teslas_seen,fsd_count,undetermined_count,fsd_rate_pct'];
   for (const r of sorted) {
-    const rate =
-      r.teslas_seen > 0 ? Math.round((1000 * r.fsd_count) / r.teslas_seen) / 10 : 0;
-    lines.push(`${r.date},${r.teslas_seen},${r.fsd_count},${rate.toFixed(1)}`);
+    const undet = Number(r.undetermined_count) || 0;
+    const rate = calcFsdRate(r.teslas_seen, r.fsd_count, undet);
+    lines.push(`${r.date},${r.teslas_seen},${r.fsd_count},${undet},${rate.toFixed(1)}`);
   }
   fs.writeFileSync(CSV_PATH, lines.join('\n') + '\n');
 }
 
-function upsertDaily(date, fsdActive, deltaSeen = 1, deltaFsd = null) {
+/**
+ * Upsert daily totals by FSD status.
+ * status: 'yes' | 'no' | 'undetermined'
+ * All statuses +deltaSeen to teslas_seen.
+ * Only 'yes' adjusts fsd_count; only 'undetermined' adjusts undetermined_count.
+ */
+function upsertDaily(date, status, delta = 1) {
   const rows = parseCsv();
   let row = rows.find((r) => r.date === date);
   if (!row) {
-    row = { date, teslas_seen: 0, fsd_count: 0, fsd_rate_pct: 0 };
+    row = { date, teslas_seen: 0, fsd_count: 0, undetermined_count: 0, fsd_rate_pct: 0 };
     rows.push(row);
   }
-  row.teslas_seen = Math.max(0, row.teslas_seen + deltaSeen);
-  const fsdDelta = deltaFsd !== null ? deltaFsd : fsdActive ? 1 : 0;
-  row.fsd_count = Math.max(0, row.fsd_count + fsdDelta);
-  row.fsd_rate_pct =
-    row.teslas_seen > 0
-      ? Math.round((1000 * row.fsd_count) / row.teslas_seen) / 10
-      : 0;
-  // Drop empty days that weren't in seed? Keep all with data; if both zero remove only if not seed-ish — keep simple: keep row
-  writeCsv(rows.filter((r) => r.teslas_seen > 0 || r.fsd_count > 0));
+  if (row.undetermined_count == null) row.undetermined_count = 0;
+  row.teslas_seen = Math.max(0, row.teslas_seen + delta);
+  if (status === 'yes') {
+    row.fsd_count = Math.max(0, row.fsd_count + delta);
+  } else if (status === 'undetermined') {
+    row.undetermined_count = Math.max(0, (row.undetermined_count || 0) + delta);
+  }
+  row.fsd_rate_pct = calcFsdRate(row.teslas_seen, row.fsd_count, row.undetermined_count);
+  writeCsv(
+    rows.filter(
+      (r) => r.teslas_seen > 0 || r.fsd_count > 0 || (r.undetermined_count || 0) > 0
+    )
+  );
   return row;
 }
 
@@ -247,6 +307,7 @@ function todayTotals(date) {
     date,
     teslas_seen: row ? row.teslas_seen : 0,
     fsd_count: row ? row.fsd_count : 0,
+    undetermined_count: row ? row.undetermined_count || 0 : 0,
     fsd_rate_pct: row ? row.fsd_rate_pct : 0,
   };
 }
@@ -270,11 +331,12 @@ function buildStats() {
   const weekRows = rows.filter((r) => r.date >= start && r.date <= end);
   const week_seen = weekRows.reduce((s, r) => s + r.teslas_seen, 0);
   const week_fsd = weekRows.reduce((s, r) => s + r.fsd_count, 0);
+  const week_undet = weekRows.reduce((s, r) => s + (r.undetermined_count || 0), 0);
   const all_time_seen = rows.reduce((s, r) => s + r.teslas_seen, 0);
   const all_time_fsd = rows.reduce((s, r) => s + r.fsd_count, 0);
-  const all_time_pct =
-    all_time_seen > 0 ? Math.round((100 * all_time_fsd) / all_time_seen) : 0;
-  const week_pct = week_seen > 0 ? Math.round((100 * week_fsd) / week_seen) : 0;
+  const all_time_undet = rows.reduce((s, r) => s + (r.undetermined_count || 0), 0);
+  const all_time_pct = Math.round(calcFsdRate(all_time_seen, all_time_fsd, all_time_undet));
+  const week_pct = Math.round(calcFsdRate(week_seen, week_fsd, week_undet));
   const since_date = rows.length ? rows[0].date : today;
   const since_label = formatSinceLabel(since_date);
   return {
@@ -285,11 +347,13 @@ function buildStats() {
       label: formatWeekLabel(start, end),
       teslas_seen: week_seen,
       fsd_count: week_fsd,
+      undetermined_count: week_undet,
       fsd_rate_pct: week_pct,
     },
     all_time: {
       teslas_seen: all_time_seen,
       fsd_count: all_time_fsd,
+      undetermined_count: all_time_undet,
       fsd_rate_pct: all_time_pct,
     },
     since: {
@@ -300,7 +364,11 @@ function buildStats() {
     title: `Central FL Tesla / FSD observations — Since ${since_label}`,
     footer: '@SamuelD2022  |  Central Florida FSD',
     daily: rows,
-    colors: { teslas_seen: '#8E8E93', on_fsd: '#3B8CFF' },
+    colors: {
+      teslas_seen: '#8E8E93',
+      on_fsd: '#3B8CFF',
+      undetermined: '#ff453a',
+    },
   };
 }
 
@@ -320,7 +388,15 @@ app.get('/api/today', (_req, res) => {
 
 app.post('/api/sighting', (req, res) => {
   const body = req.body || {};
-  const fsd_active = Boolean(body.fsd_active);
+  let status = normalizeStatus(body.fsd_status);
+  if (!status) {
+    // Backward compat: boolean fsd_active
+    if (typeof body.fsd_active === 'boolean') {
+      status = body.fsd_active ? 'yes' : 'no';
+    } else {
+      status = 'no';
+    }
+  }
   const now = new Date();
   const date = todayET();
   const id = body.id && String(body.id) ? String(body.id) : crypto.randomUUID();
@@ -338,10 +414,14 @@ app.post('/api/sighting', (req, res) => {
     id,
     timestamp: body.timestamp || now.toISOString(),
     date,
-    fsd_active,
+    fsd_status: status,
   };
+  // Keep fsd_active boolean for yes/no only (backward compat)
+  if (status === 'yes' || status === 'no') {
+    ev.fsd_active = status === 'yes';
+  }
   appendEvent(ev);
-  const row = upsertDaily(date, fsd_active, 1, fsd_active ? 1 : 0);
+  const row = upsertDaily(date, status, 1);
   res.json({
     ok: true,
     event: ev,
@@ -349,6 +429,7 @@ app.post('/api/sighting', (req, res) => {
       date,
       teslas_seen: row.teslas_seen,
       fsd_count: row.fsd_count,
+      undetermined_count: row.undetermined_count || 0,
       fsd_rate_pct: row.fsd_rate_pct,
     },
   });
@@ -361,7 +442,8 @@ app.post('/api/undo', (_req, res) => {
   }
   const last = events.pop();
   rewriteEvents(events);
-  upsertDaily(last.date, last.fsd_active, -1, last.fsd_active ? -1 : 0);
+  const status = eventStatus(last);
+  upsertDaily(last.date, status, -1);
   const totals = todayTotals(todayET());
   res.json({ ok: true, undone: last, today: totals });
 });
@@ -393,11 +475,13 @@ function eventCountsByDate() {
     if (!e || !e.date) continue;
     let row = map.get(e.date);
     if (!row) {
-      row = { date: e.date, teslas_seen: 0, fsd_count: 0 };
+      row = { date: e.date, teslas_seen: 0, fsd_count: 0, undetermined_count: 0 };
       map.set(e.date, row);
     }
     row.teslas_seen += 1;
-    if (e.fsd_active) row.fsd_count += 1;
+    const status = eventStatus(e);
+    if (status === 'yes') row.fsd_count += 1;
+    else if (status === 'undetermined') row.undetermined_count += 1;
   }
   return [...map.values()];
 }
@@ -408,14 +492,17 @@ app.post('/api/import-events', (req, res) => {
   let imported = 0;
   for (const raw of list) {
     if (!raw || !raw.id || existing.has(raw.id)) continue;
-    const fsd_active = Boolean(raw.fsd_active);
+    const status = eventStatus(raw);
     const date = String(raw.date || todayET());
     const ev = {
       id: String(raw.id),
       timestamp: raw.timestamp || new Date().toISOString(),
       date,
-      fsd_active,
+      fsd_status: status,
     };
+    if (status === 'yes' || status === 'no') {
+      ev.fsd_active = status === 'yes';
+    }
     appendEvent(ev);
     existing.add(ev.id);
     imported += 1;
@@ -438,8 +525,9 @@ app.post('/api/set-day', (req, res) => {
   const date = String(body.date || todayET());
   const teslas_seen = Math.max(0, Number(body.teslas_seen) || 0);
   const fsd_count = Math.max(0, Number(body.fsd_count) || 0);
+  const undetermined_count = Math.max(0, Number(body.undetermined_count) || 0);
   const rows = parseCsv().filter((r) => r.date !== date);
-  rows.push({ date, teslas_seen, fsd_count, fsd_rate_pct: 0 });
+  rows.push({ date, teslas_seen, fsd_count, undetermined_count, fsd_rate_pct: 0 });
   writeCsv(rows);
   res.json({ ok: true, row: todayTotals(date), today: todayTotals(todayET()) });
 });
