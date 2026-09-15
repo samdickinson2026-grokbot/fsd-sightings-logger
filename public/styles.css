@@ -164,17 +164,17 @@ body {
 .choice-row {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 14px;
   width: 100%;
   max-width: 440px;
 }
 
 .btn-choice {
   width: 100%;
-  min-height: 152px;
+  min-height: 112px;
   border-radius: 28px;
   border: 1px solid var(--border);
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 700;
   cursor: pointer;
   touch-action: manipulation;
@@ -195,6 +195,12 @@ body {
 .btn-fsd-no {
   background: var(--bg-card);
   color: var(--text);
+}
+
+.btn-fsd-undetermined {
+  background: #3a1412;
+  color: #ff8a84;
+  border-color: #ff453a;
 }
 
 .prompt {

@@ -7,11 +7,13 @@
   const dateValue = $('#date-value');
   const totSeen = $('#tot-seen');
   const totFsd = $('#tot-fsd');
+  const totUndet = $('#tot-undet');
   const stepMain = $('#step-main');
   const stepChoice = $('#step-choice');
   const btnSaw = $('#btn-saw');
   const btnYes = $('#btn-fsd-yes');
   const btnNo = $('#btn-fsd-no');
+  const btnUndetermined = $('#btn-fsd-undetermined');
   const btnUndo = $('#btn-undo');
   const toastEl = $('#toast');
   const statsSummary = $('#stats-summary');
@@ -29,6 +31,12 @@
   let dailyChart = null;
   let toastTimer = null;
   let busy = false;
+
+  const DEFAULT_COLORS = {
+    teslas_seen: '#8E8E93',
+    on_fsd: '#3B8CFF',
+    undetermined: '#ff453a',
+  };
 
   function loadLocalEvents() {
     try {
@@ -78,10 +86,24 @@
     toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
   }
 
+  function fsdRatePct(seen, fsd, undet) {
+    const denom = (seen || 0) - (undet || 0);
+    if (denom <= 0) return 0;
+    return Math.round((100 * fsd) / denom);
+  }
+
   function setTotals(t) {
     if (!t) return;
     totSeen.textContent = String(t.teslas_seen ?? 0);
     totFsd.textContent = String(t.fsd_count ?? 0);
+    if (totUndet) totUndet.textContent = String(t.undetermined_count ?? 0);
+  }
+
+  function pillSub(t) {
+    const seen = t.teslas_seen ?? 0;
+    const fsd = t.fsd_count ?? 0;
+    const undet = t.undetermined_count ?? 0;
+    return `Today: ${seen} seen · ${fsd} FSD · ? ${undet}`;
   }
 
   function showMain() {
@@ -137,33 +159,51 @@
     if ($('#page-alltime').classList.contains('active')) await loadAllTimeStats();
   }
 
-  async function logSighting(fsd_active) {
+  function statusLabel(status) {
+    if (status === 'yes') return 'FSD active';
+    if (status === 'undetermined') return 'Undetermined';
+    return 'FSD not active';
+  }
+
+  function eventStatus(ev) {
+    if (!ev) return 'no';
+    if (ev.fsd_status === 'yes' || ev.fsd_status === 'no' || ev.fsd_status === 'undetermined') {
+      return ev.fsd_status;
+    }
+    return ev.fsd_active ? 'yes' : 'no';
+  }
+
+  /** status: 'yes' | 'no' | 'undetermined' */
+  async function logSighting(status) {
     if (busy) return;
     busy = true;
     const localEv = {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
       date: currentDate || undefined,
-      fsd_active,
+      fsd_status: status,
     };
+    if (status === 'yes' || status === 'no') {
+      localEv.fsd_active = status === 'yes';
+    }
     upsertLocalEvent(localEv);
     try {
+      const body = {
+        fsd_status: status,
+        id: localEv.id,
+        timestamp: localEv.timestamp,
+      };
+      if (status === 'yes' || status === 'no') {
+        body.fsd_active = status === 'yes';
+      }
       const data = await api('/api/sighting', {
         method: 'POST',
-        body: JSON.stringify({
-          fsd_active,
-          id: localEv.id,
-          timestamp: localEv.timestamp,
-        }),
+        body: JSON.stringify(body),
       });
       if (data.event) upsertLocalEvent(data.event);
       setTotals(data.today);
       showMain();
-      const label = fsd_active ? 'Logged · FSD active' : 'Logged · FSD not active';
-      showToast(
-        label,
-        `Today: ${data.today.teslas_seen} seen · ${data.today.fsd_count} FSD`
-      );
+      showToast(`Logged · ${statusLabel(status)}`, pillSub(data.today));
       await refreshUndoState();
       await refreshOpenStatsTabs();
     } catch (err) {
@@ -181,8 +221,7 @@
       const data = await api('/api/undo', { method: 'POST', body: '{}' });
       if (data.undone && data.undone.id) removeLocalEvent(data.undone.id);
       setTotals(data.today);
-      const kind = data.undone.fsd_active ? 'FSD active' : 'FSD not active';
-      showToast('Undone', kind);
+      showToast('Undone', statusLabel(eventStatus(data.undone)));
       await refreshUndoState();
       await refreshOpenStatsTabs();
     } catch (err) {
@@ -193,23 +232,26 @@
     }
   }
 
-  function makeBarChart(canvas, chartRefName, seen, fsd, titleLines, subtitle, colors) {
+  function makeBarChart(canvas, chartRefName, seen, fsd, undet, titleLines, subtitle, colors) {
     const ctx = canvas.getContext('2d');
     if (chartRefName === 'daily' && dailyChart) dailyChart.destroy();
     if (chartRefName === 'alltime' && allTimeChart) allTimeChart.destroy();
 
+    const c = colors || DEFAULT_COLORS;
+    const undetermined = undet || 0;
+
     const chart = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: ['Teslas Seen', 'On FSD'],
+        labels: ['Teslas Seen', 'On FSD', 'Undetermined'],
         datasets: [
           {
-            data: [seen, fsd],
-            backgroundColor: [colors.teslas_seen, colors.on_fsd],
+            data: [seen, fsd, undetermined],
+            backgroundColor: [c.teslas_seen, c.on_fsd, c.undetermined || DEFAULT_COLORS.undetermined],
             borderWidth: 0,
             borderRadius: 2,
             barPercentage: 0.55,
-            categoryPercentage: 0.55,
+            categoryPercentage: 0.7,
           },
         ],
       },
@@ -237,7 +279,7 @@
         scales: {
           x: {
             grid: { display: false },
-            ticks: { color: '#333', font: { size: 12, weight: '500' } },
+            ticks: { color: '#333', font: { size: 11, weight: '500' } },
           },
           y: {
             beginAtZero: true,
@@ -249,7 +291,7 @@
             },
             grid: { color: 'rgba(0,0,0,0.06)' },
             ticks: { color: '#555', precision: 0 },
-            suggestedMax: Math.max(seen, fsd, 1) * 1.3,
+            suggestedMax: Math.max(seen, fsd, undetermined, 1) * 1.3,
           },
         },
         animation: { duration: 400 },
@@ -257,16 +299,16 @@
       plugins: [
         {
           id: 'valueLabels',
-          afterDatasetsDraw(c) {
-            const { ctx: g } = c;
-            const meta = c.getDatasetMeta(0);
+          afterDatasetsDraw(chartInst) {
+            const { ctx: g } = chartInst;
+            const meta = chartInst.getDatasetMeta(0);
             g.save();
             g.font = 'bold 14px system-ui, sans-serif';
             g.fillStyle = '#111111';
             g.textAlign = 'center';
             g.textBaseline = 'bottom';
             meta.data.forEach((bar, i) => {
-              const val = c.data.datasets[0].data[i];
+              const val = chartInst.data.datasets[0].data[i];
               g.fillText(String(val), bar.x, bar.y - 6);
             });
             g.restore();
@@ -285,17 +327,19 @@
     for (const r of sorted) {
       const tr = document.createElement('tr');
       if (r.date === today) tr.classList.add('today');
+      const undet = r.undetermined_count ?? 0;
       tr.innerHTML = `
         <td>${r.date}</td>
         <td>${r.teslas_seen}</td>
         <td>${r.fsd_count}</td>
+        <td>${undet}</td>
         <td>${Number(r.fsd_rate_pct).toFixed(1)}</td>
       `;
       dailyTbody.appendChild(tr);
     }
     if (!sorted.length) {
       dailyTbody.innerHTML =
-        '<tr><td colspan="4" style="text-align:center;color:#9aa3b2">No data yet</td></tr>';
+        '<tr><td colspan="5" style="text-align:center;color:#9aa3b2">No data yet</td></tr>';
     }
   }
 
@@ -304,9 +348,9 @@
       const today = await api('/api/today');
       const seen = today.totals.teslas_seen || 0;
       const fsd = today.totals.fsd_count || 0;
-      const pct =
-        seen > 0 ? Math.round((100 * fsd) / seen) : 0;
-      dailySummary.textContent = `Today: ${seen} seen · ${fsd} FSD · ${pct}%`;
+      const undet = today.totals.undetermined_count || 0;
+      const pct = fsdRatePct(seen, fsd, undet);
+      dailySummary.textContent = `Today: ${seen} seen · ${fsd} FSD · ? ${undet} · ${pct}%`;
       dailyTitle.textContent = `Central FL Tesla / FSD observations — ${today.display}`;
       dailyChartFooter.textContent = '@SamuelD2022  |  Central Florida FSD';
       makeBarChart(
@@ -314,9 +358,10 @@
         'daily',
         seen,
         fsd,
+        undet,
         ['Central FL Tesla / FSD observations', today.display],
         `${pct}% FSD today`,
-        { teslas_seen: '#8E8E93', on_fsd: '#3B8CFF' }
+        DEFAULT_COLORS
       );
     } catch (err) {
       dailySummary.textContent = 'Failed to load daily stats';
@@ -331,14 +376,16 @@
       statsTitle.textContent = stats.title;
       chartFooter.textContent = stats.footer;
       const sinceLabel = (stats.since && stats.since.label) || 'start';
+      const undet = stats.all_time.undetermined_count || 0;
       makeBarChart(
         $('#week-chart'),
         'alltime',
         stats.all_time.teslas_seen,
         stats.all_time.fsd_count,
+        undet,
         ['Central FL Tesla / FSD observations', `Since ${sinceLabel}`],
         `${stats.all_time.fsd_rate_pct}% FSD since ${sinceLabel}`,
-        stats.colors
+        stats.colors || DEFAULT_COLORS
       );
       renderTable(stats.daily, stats.today);
     } catch (err) {
@@ -360,8 +407,9 @@
   });
 
   btnSaw.addEventListener('click', () => showChoice());
-  btnYes.addEventListener('click', () => logSighting(true));
-  btnNo.addEventListener('click', () => logSighting(false));
+  btnYes.addEventListener('click', () => logSighting('yes'));
+  btnNo.addEventListener('click', () => logSighting('no'));
+  btnUndetermined.addEventListener('click', () => logSighting('undetermined'));
   btnUndo.addEventListener('click', () => undoLast());
 
   async function tickDate() {
